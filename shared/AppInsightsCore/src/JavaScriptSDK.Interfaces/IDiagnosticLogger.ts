@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 import { _InternalMessageId, LoggingSeverity } from "../JavaScriptSDK.Enums/LoggingEnums";
 import { _InternalLogMessage } from "../JavaScriptSDK/DiagnosticLogger";
+import { ITelemetryUpdateState } from "./ITelemetryUpdateState";
 
 "use strict"
 
@@ -67,4 +68,10 @@ export interface IDiagnosticLogger {
      * @param message {_InternalLogMessage} - The message to log.
      */
     logInternalMessage?(severity: LoggingSeverity, message: _InternalLogMessage): void;
+
+    /**
+     * Optional Callback hook to allow the diagnostic logger to update it's configuration
+     * @param updateState
+     */
+    update?(updateState: ITelemetryUpdateState): void;
 }

@@ -4,15 +4,11 @@ import {
     strShimUndefined, strShimObject, strShimFunction, throwTypeError,
     ObjClass, ObjProto, ObjAssign, ObjHasOwnProperty, ObjDefineProperty, strShimPrototype
 } from "@microsoft/applicationinsights-shims";
+import { strEmpty } from "./InternalConstants";
 
 // RESTRICT and AVOID circular dependencies you should not import other contained modules or export the contents of this file directly
 
 // Added to help with minfication
-const strOnPrefix = "on";
-const strAttachEvent = "attachEvent";
-const strAddEventHelper = "addEventListener";
-const strDetachEvent = "detachEvent";
-const strRemoveEventListener = "removeEventListener";
 const strToISOString = "toISOString";
 const cStrEndsWith = "endsWith";
 const cStrStartsWith = "startsWith";
@@ -123,54 +119,8 @@ export function isFunction(value: any): value is Function {
     return !!(value && typeof value === strShimFunction);
 }
 
-/**
- * Binds the specified function to an event, so that the function gets called whenever the event fires on the object
- * @param obj Object to add the event too.
- * @param eventNameWithoutOn String that specifies any of the standard DHTML Events without "on" prefix
- * @param handlerRef Pointer that specifies the function to call when event fires
- * @param useCapture [Optional] Defaults to false
- * @returns True if the function was bound successfully to the event, otherwise false
- */
-export function attachEvent(obj: any, eventNameWithoutOn: string, handlerRef: any, useCapture: boolean = false) {
-    let result = false;
-    if (!isNullOrUndefined(obj)) {
-        try {
-            if (!isNullOrUndefined(obj[strAddEventHelper])) {
-                // all browsers except IE before version 9
-                obj[strAddEventHelper](eventNameWithoutOn, handlerRef, useCapture);
-                result = true;
-            } else if (!isNullOrUndefined(obj[strAttachEvent])) {
-                // IE before version 9
-                obj[strAttachEvent](strOnPrefix + eventNameWithoutOn, handlerRef);
-                result = true;
-            }
-        } catch (e) {
-            // Just Ignore any error so that we don't break any execution path
-        }
-    }
-
-    return result;
-}
-
-/**
- * Removes an event handler for the specified event
- * @param Object to remove the event from
- * @param eventNameWithoutOn {string} - The name of the event
- * @param handlerRef {any} - The callback function that needs to be executed for the given event
- * @param useCapture [Optional] Defaults to false
- */
-export function detachEvent(obj: any, eventNameWithoutOn: string, handlerRef: any, useCapture: boolean = false) {
-    if (!isNullOrUndefined(obj)) {
-        try {
-            if (!isNullOrUndefined(obj[strRemoveEventListener])) {
-                obj[strRemoveEventListener](eventNameWithoutOn, handlerRef, useCapture);
-            } else if (!isNullOrUndefined(obj[strDetachEvent])) {
-                obj[strDetachEvent](strOnPrefix + eventNameWithoutOn, handlerRef);
-            }
-        } catch (e) {
-            // Just Ignore any error so that we don't break any execution path
-        }
-    }
+export function isPromiseLike<T>(value: any): value is PromiseLike<T> {
+    return value && isFunction(value.then);
 }
 
 /**
@@ -204,7 +154,7 @@ export function normalizeJsName(name: string): string {
  * @param target The target object to find and process the keys
  * @param callbackfn The function to call with the details
  */
-export function objForEachKey(target: any, callbackfn: (name: string, value: any) => void) {
+export function objForEachKey<T = any>(target: T, callbackfn: (name: string, value: T[keyof T]) => void) {
     if (target) {
         for (let prop in target) {
             if (ObjHasOwnProperty.call(target, prop)) {
@@ -315,7 +265,8 @@ export function isDate(obj: any): obj is Date {
 }
 
 /**
- * Check if an object is of type Array
+ * Check if an object is of type Array with optional generic T, the generic type is not validated
+ * and exists to help with TypeScript validation only.
  */
 export let isArray: <T = any>(obj: any) => obj is Array<T> = _isArray || _isArrayPoly;
 function _isArrayPoly<T = any>(obj: any): obj is Array<T> {
@@ -438,7 +389,7 @@ export function _toISOStringPoly(date: Date) {
  * @param callbackfn  A function that accepts up to three arguments. forEach calls the callbackfn function one time for each element in the array. It can return -1 to break out of the loop
  * @param thisArg  [Optional] An object to which the this keyword can refer in the callbackfn function. If thisArg is omitted, undefined is used as the this value.
  */
-export function arrForEach<T>(arr: T[], callbackfn: (value: T, index?: number, array?: T[]) => void|number, thisArg?: any): void {
+export function arrForEach<T = any>(arr: T[], callbackfn: (value: T, index?: number, array?: T[]) => void|number, thisArg?: any): void {
     let len = arr.length;
     try {
         for (let idx = 0; idx < len; idx++) {
@@ -664,6 +615,18 @@ function _doNothing<T>(value: T): T {
     return value;
 }
 
+export function deepFreeze<T>(obj: T): T {
+    if (_objFreeze) {
+        objForEachKey(obj, (name, value) => {
+            if (isArray(value) || isObject(value)) {
+                _objFreeze(value);
+            }
+        });
+    }
+
+    return objFreeze(obj);
+}
+
 export const objFreeze: <T>(value: T) => T = _objFreeze || _doNothing;
 export const objSeal: <T>(value: T) => T = _objSeal || _doNothing;
 
@@ -685,7 +648,7 @@ export function getExceptionName(object: any): string {
         return object.name;
     }
 
-    return "";
+    return strEmpty;
 }
 
 /**
@@ -746,6 +709,28 @@ export function throwError(message: string): never {
     throw new Error(message);
 }
 
+function _createProxyFunction<S>(source: S | (() => S), funcName: (keyof S)) {
+    let srcFunc: () => S = null;
+    let src: S = null;
+    if (isFunction (source)) {
+        srcFunc = source;
+    } else {
+        src = source;
+    }
+
+    return function() {
+        // Capture the original arguments passed to the method
+        var originalArguments = arguments;
+        if (srcFunc) {
+            src = srcFunc();
+        }
+
+        if (src) {
+            return (src[funcName] as any).apply(src, originalArguments);
+        }
+    }
+}
+
 /**
  * Effectively assigns all enumerable properties (not just own properties) and functions (including inherited prototype) from
  * the source object to the target, it attempts to use proxy getters / setters (if possible) and proxy functions to avoid potential
@@ -760,10 +745,9 @@ export function throwError(message: string): never {
  * @param target - The target object to be assigned with the source properties and functions
  * @param source - The source object which will be assigned / called by setting / calling the targets proxies
  * @param chkSet - An optional callback to determine whether a specific property/function should be proxied
- * @memberof Initialization
  */
-export function proxyAssign(target: any, source: any, chkSet?: (name: string, isFunc?: boolean, source?: any, target?: any) => boolean) {
-    if (target && source && target !== source && isObject(target) && isObject(source)) {
+export function proxyAssign<T, S>(target: T, source: S, chkSet?: (name: string, isFunc?: boolean, source?: S, target?: T) => boolean) {
+    if (target && source && isObject(target) && isObject(source)) {
         // effectively apply/proxy full source to the target instance
         for (const field in source) {
             if (isString(field)) {
@@ -771,18 +755,12 @@ export function proxyAssign(target: any, source: any, chkSet?: (name: string, is
                 if (isFunction(value)) {
                     if (!chkSet || chkSet(field, true, source, target)) {
                         // Create a proxy function rather than just copying the (possible) prototype to the new object as an instance function
-                        target[field as string] = (function(funcName: string) {
-                            return function() {
-                                // Capture the original arguments passed to the method
-                                var originalArguments = arguments;
-                                return source[funcName].apply(source, originalArguments);
-                            }
-                        })(field);
+                        target[field as string] = _createProxyFunction(source, field);
                     }
                 } else if (!chkSet || chkSet(field, false, source, target)) {
                     if (hasOwnProperty(target, field)) {
                         // Remove any previous instance property
-                        delete target[field];
+                        delete (target as any)[field];
                     }
 
                     if (!objDefineAccessors(target, field, () => {
@@ -803,6 +781,33 @@ export function proxyAssign(target: any, source: any, chkSet?: (name: string, is
     return target;
 }
 
+export function proxyFunctionAs<T, S>(target: T, name: string, source: S | (() => S), theFunc: (keyof S), overwriteTarget: boolean = true) {
+    if (target && name && source) {
+        if (overwriteTarget || isUndefined(target[name])) {
+            (target as any)[name] = _createProxyFunction(source, theFunc);
+        }
+    }
+}
+
+/**
+ * Creates proxy functions on the target which internally will call the source version with all arguments passed to the target method.
+ *
+ * @param target - The target object to be assigned with the source properties and functions
+ * @param source - The source object which will be assigned / called by setting / calling the targets proxies
+ * @param functionsToProxy - An array of function names that will be proxied on the target
+ */
+ export function proxyFunctions<T, S>(target: T, source: S | (() => S), functionsToProxy: (keyof S)[], overwriteTarget: boolean = true) {
+    if (target && source && isObject(target) && isArray(functionsToProxy)) {
+        arrForEach(functionsToProxy, (theFuncName) => {
+            if (isString(theFuncName)) {
+                proxyFunctionAs(target, theFuncName, source, theFuncName, overwriteTarget);
+            }
+        });
+    }
+
+    return target;
+}
+
 /**
  * Simpler helper to create a dynamic class that implements the interface and populates the values with the defaults.
  * Only instance properties (hasOwnProperty) values are copied from the defaults to the new instance
@@ -818,6 +823,25 @@ export function createClassFromInterface<T>(defaults?: T) {
             }
         }
     } as new () => T;
+}
+
+/**
+ * Create an enum style object which has both the key => value and value => key mappings
+ * @param values - The values to populate on the new object
+ * @returns
+ */
+export function createEnumStyle<T>(values: T) {
+    let enumClass: any = {};
+    objForEachKey(values, (field, value) => {
+        enumClass[field] = value;
+        // Add Reverse lookup
+        if (!isUndefined(enumClass[value])) {
+            throwError("Value: [" + value + "] already exists for " + field);
+        }
+        enumClass[value] = field;
+    });
+
+    return objFreeze(enumClass as T);
 }
 
 /**

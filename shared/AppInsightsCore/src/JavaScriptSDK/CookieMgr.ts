@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 import { IDiagnosticLogger } from "../JavaScriptSDK.Interfaces/IDiagnosticLogger";
 import { ICookieMgr, ICookieMgrConfig } from "../JavaScriptSDK.Interfaces/ICookieMgr";
-import { _InternalMessageId, LoggingSeverity } from "../JavaScriptSDK.Enums/LoggingEnums";
+import { _eInternalMessageId, eLoggingSeverity } from "../JavaScriptSDK.Enums/LoggingEnums";
 import { dumpObj, getDocument, getLocation, getNavigator, isIE } from "./EnvUtils";
 import {
     arrForEach, dateNow, getExceptionName, isFunction, isNotNullOrUndefined, isNullOrUndefined, isString, isTruthy, isUndefined,
@@ -10,6 +10,8 @@ import {
 } from "./HelperFuncs";
 import { IConfiguration } from "../JavaScriptSDK.Interfaces/IConfiguration";
 import { IAppInsightsCore } from "../JavaScriptSDK.Interfaces/IAppInsightsCore";
+import { strEmpty } from "./InternalConstants";
+import { ITelemetryUpdateState } from "../JavaScriptSDK.Interfaces/ITelemetryUpdateState";
 
 const strToGMTString = "toGMTString";
 const strToUTCString = "toUTCString";
@@ -19,7 +21,6 @@ const strEnabled = "enabled";
 const strIsCookieUseDisabled = "isCookieUseDisabled";
 const strDisableCookiesUsage = "disableCookiesUsage";
 const strConfigCookieMgr = "_ckMgr";
-const strEmpty = "";
 
 let _supportsCookies: boolean = null;
 let _allowUaSameSite: boolean = null;
@@ -232,6 +233,17 @@ export function createCookieMgr(rootConfig?: IConfiguration, logger?: IDiagnosti
             }
 
             return result;
+        },
+        update: (updateState: ITelemetryUpdateState) => {
+            rootConfig = updateState.newCfg;
+            cookieMgrConfig = _createCookieMgrConfig(rootConfig || _globalCookieConfig);
+
+            _path = cookieMgrConfig.path || _path;
+            _domain = cookieMgrConfig.domain || _domain;
+            // Explicitly checking against false, so that setting to undefined will === true
+            if (!isUndefined(cookieMgrConfig[strEnabled])) {
+                _enabled = cookieMgrConfig[strEnabled] !== false;
+            }
         }
     };
 
@@ -253,8 +265,8 @@ export function areCookiesSupported(logger?: IDiagnosticLogger): any {
             _supportsCookies = doc[strCookie] !== undefined;
         } catch (e) {
             logger && logger.throwInternal(
-                LoggingSeverity.WARNING,
-                _InternalMessageId.CannotAccessCookie,
+                eLoggingSeverity.WARNING,
+                _eInternalMessageId.CannotAccessCookie,
                 "Cannot access document.cookie - " + getExceptionName(e),
                 { exception: dumpObj(e) });
         }

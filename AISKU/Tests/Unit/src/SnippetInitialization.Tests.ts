@@ -129,6 +129,8 @@ export class SnippetInitializationTests extends AITestClass {
                             // that this functions exists we can't validate that it is called
                         } else if (method === "setAuthenticatedUserContext" || method === "clearAuthenticatedUserContext") {
                             funcSpy = this.sandbox.spy(theSnippet.context.user, method);
+                        } else if (method === "addTelemetryInitializer") {
+                            funcSpy = this.sandbox.spy(theSnippet.core, method);
                         } else {
                             funcSpy = this.sandbox.spy(theSnippet.appInsights, method);
                         }

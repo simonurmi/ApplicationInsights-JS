@@ -5,40 +5,40 @@ import { DataPointType } from "./DataPointType";
 /**
  * Metric data single measurement.
  */
-export class DataPoint {
+export interface IDataPoint {
 
     /**
      * Name of the metric.
      */
-    public name: string;
+    name: string;
 
     /**
      * Metric type. Single measurement or the aggregated value.
      */
-    public kind: DataPointType = DataPointType.Measurement;
+    kind: DataPointType;
 
     /**
      * Single value for measurement. Sum of individual measurements for the aggregation.
      */
-    public value: number;
+    value: number;
 
     /**
      * Metric weight of the aggregated metric. Should not be set for a measurement.
      */
-    public count: number;
+    count: number;
 
     /**
      * Minimum value of the aggregated metric. Should not be set for a measurement.
      */
-    public min: number;
+    min: number;
 
     /**
      * Maximum value of the aggregated metric. Should not be set for a measurement.
      */
-    public max: number;
+    max: number;
 
     /**
      * Standard deviation of the aggregated metric. Should not be set for a measurement.
      */
-    public stdDev: number;
+    stdDev: number;
 }

@@ -47,6 +47,10 @@ export class ApplicationInsightsDeprecatedTests extends AITestClass {
     }
 
     public testCleanup() {
+        if (this._snippet && this._snippet["unload"]) {
+            // force unload
+            this._snippet["unload"](false);
+        }
     }
 
     public registerTests() {

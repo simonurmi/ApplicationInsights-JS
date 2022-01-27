@@ -24,6 +24,27 @@ function _getObjName(target:any, unknownValue?:string) {
     return (((target || {})["constructor"]) || {}).name || unknownValue || "";
 }
 
+function _getAllAiDataKeys<T = any>(target: T, callbackfn: (name: string, value: T[keyof T]) => void) {
+    if (target) {
+        let keys = Object.getOwnPropertyNames(target);
+        for (let lp = 0; lp < keys.length; lp++) {
+            if (keys[lp].startsWith("_aiData")) {
+                callbackfn.call(target, keys[lp], target[keys[lp]]);
+            }
+        }
+    }
+}
+
+function _objForEachKey<T = any>(target: T, callbackfn: (name: string, value: T[keyof T]) => void) {
+    if (target) {
+        for (let prop in target) {
+            if (Object.prototype.hasOwnProperty.call(target, prop)) {
+                callbackfn.call(target, prop, target[prop]);
+            }
+        }
+    }
+}
+
 export class AITestClass {
     public static isPollingStepFlag = "isPollingStep";
 
@@ -767,6 +788,7 @@ export class AITestClass {
         }
 
         this.testCleanup();
+        this._cleanupEvents();
 
         // Clear the instance of the currently running suite.
         AITestClass.currentTestClass = null;
@@ -885,6 +907,49 @@ export class AITestClass {
                     _self._xhrOrgSend.apply(xhr, theArguments);
                 }
             }
+        }
+    }
+
+    private _removeAllEvents(target: any, targetName: string): any {
+        let dataName: string[] = [];
+        _getAllAiDataKeys(target, (name, value) => {
+            if (name.startsWith("_aiDataEvents")) {
+                dataName.push(name);
+                let events = value.events;
+                _objForEachKey(events, (evtName, evts) => {
+                    for (let lp = 0; lp < evts.length; lp++) {
+                        let theEvent = evts[lp];
+                        console && console.log("Removing " + targetName + " Event: " + evtName + "." + (theEvent.evtName.ns || ""));
+                        if (target.removeEventListener) {
+                            target.removeEventListener(evtName, theEvent.handler, theEvent.capture);
+                        }
+                    }
+                });
+
+                delete value.events;
+            }
+        });
+
+        for (let lp = 0; lp < dataName.length; lp++) {
+            delete target[dataName[lp]];
+        }
+
+        return null;
+    }
+
+    private _cleanupEvents() {
+        this._removeAllEvents(window, "window");
+        this._removeAllEvents(document, "document");
+        if (document["body"]) {
+            this._removeAllEvents(document["body"], "body");
+        }
+
+        if (navigator) {
+            this._removeAllEvents(navigator, "navigator");
+        }
+
+        if (history) {
+            this._removeAllEvents(history, "history");
         }
     }
 }

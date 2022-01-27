@@ -18,9 +18,9 @@ import {
     _InternalMessageId, LoggingSeverity, IDiagnosticLogger, IAppInsightsCore, IPlugin,
     getWindow, getNavigator, getJSON, BaseTelemetryPlugin, ITelemetryPluginChain, INotificationManager,
     SendRequestReason, objForEachKey, isNullOrUndefined, arrForEach, dateNow, dumpObj, getExceptionName, getIEVersion, throwError, objKeys,
-    isBeaconsSupported, isFetchSupported, useXDomainRequest, isXhrSupported, isArray
+    isBeaconsSupported, isFetchSupported, useXDomainRequest, isXhrSupported, isArray, createUniqueNamespace, mergeEvtNamespace
 } from "@microsoft/applicationinsights-core-js";
-import { Offline } from "./Offline";
+import { createOfflineListener, IOfflineListener } from "./Offline";
 import { Sample } from "./TelemetryProcessors/Sample"
 import dynamicProto from "@microsoft/dynamicproto-js";
 
@@ -103,7 +103,7 @@ export class Sender extends BaseTelemetryPlugin implements IChannelControlsAI {
     /**
      * The configuration for this sender instance
      */
-    public readonly _senderConfig: ISenderConfig;
+    public readonly _senderConfig: ISenderConfig = _getDefaultAppInsightsChannelConfig();
 
     /**
      * A method which will cause data to be send to the url
@@ -125,57 +125,24 @@ export class Sender extends BaseTelemetryPlugin implements IChannelControlsAI {
     constructor() {
         super();
 
-        /**
-         * How many times in a row a retryable error condition has occurred.
-         */
-        let _consecutiveErrors: number;
-
-        /**
-         * The time to retry at in milliseconds from 1970/01/01 (this makes the timer calculation easy).
-         */
-        let _retryAt: number;
-
-        /**
-         * The time of the last send operation.
-         */
-        let _lastSend: number;
-
-        /**
-         * Flag indicating that the sending should be paused
-         */
-        let _paused = false;
-
-        /**
-         * Handle to the timer for delayed sending of batches of data.
-         */
-        let _timeoutHandle: any;
-
+        // Don't set the defaults here, set them in the _initDefaults() as this is also called during unload
+        let _consecutiveErrors: number;         // How many times in a row a retryable error condition has occurred.
+        let _retryAt: number;                   // The time to retry at in milliseconds from 1970/01/01 (this makes the timer calculation easy).
+        let _lastSend: number;                  // The time of the last send operation.
+        let _paused: boolean;                   // Flag indicating that the sending should be paused
+        let _timeoutHandle: any;                // Handle to the timer for delayed sending of batches of data.
         let _serializer: Serializer;
-
         let _stamp_specific_redirects: number;
-
-        let _headers: { [name: string]: string } = {};
-
-        // Keep track of the outstanding sync fetch payload total (as sync fetch has limits)
-        let _syncFetchPayload = 0;
-
-        /**
-         * The sender to use if the payload size is too large
-         */
-        let _fallbackSender: SenderFunction;
-
-        /**
-         * The identified sender to use for the synchronous unload stage
-         */
-        let _syncUnloadSender: SenderFunction;
-
-        this._senderConfig = _getDefaultAppInsightsChannelConfig();
+        let _headers: { [name: string]: string };
+        let _syncFetchPayload = 0;              // Keep track of the outstanding sync fetch payload total (as sync fetch has limits)
+        let _fallbackSender: SenderFunction;    // The sender to use if the payload size is too large
+        let _syncUnloadSender: SenderFunction;  // The identified sender to use for the synchronous unload stage
+        let _offlineListener: IOfflineListener;
+        let _evtNamespace: string | string[];
 
         dynamicProto(Sender, this, (_self, _base) => {
 
-            function _notImplemented() {
-                throwError("Method not implemented.");
-            }
+            _initDefaults();
 
             _self.pause = () => {
                 _clearScheduledTimer();
@@ -196,13 +163,13 @@ export class Sender extends BaseTelemetryPlugin implements IChannelControlsAI {
                 }
             };
         
-            _self.flush = () => {
+            _self.flush = (isAsync: boolean = true, callBack?: () => void, sendReason?: SendRequestReason) => {
                 if (!_paused) {
                     // Clear the normal schedule timer as we are going to try and flush ASAP
                     _clearScheduledTimer();
 
                     try {
-                        _self.triggerSend(true, null, SendRequestReason.ManualFlush);
+                        _self.triggerSend(isAsync, null, sendReason || SendRequestReason.ManualFlush);
                     } catch (e) {
                         _self.diagLog().throwInternal(LoggingSeverity.CRITICAL,
                             _InternalMessageId.FlushFailed,
@@ -229,7 +196,16 @@ export class Sender extends BaseTelemetryPlugin implements IChannelControlsAI {
                 }
             };
 
-            _self.teardown = _notImplemented;
+            _self.unload = (itemCtx: IProcessTelemetryContext, isAsync: boolean): void => {
+                _self.onunloadFlush();
+                _base.unload(itemCtx, isAsync);
+                _initDefaults();
+            };
+
+            _self.teardown = () => {
+                _offlineListener.unload();
+                _offlineListener = null;
+            };
 
             _self.addHeader = (name: string, value: string) => {
                 _headers[name] = value;
@@ -246,6 +222,8 @@ export class Sender extends BaseTelemetryPlugin implements IChannelControlsAI {
                 _self._sender = null;
                 _stamp_specific_redirects = 0;
                 let diagLog = _self.diagLog();
+                _evtNamespace = mergeEvtNamespace(createUniqueNamespace("Sender"), core.evtNamespace && core.evtNamespace());
+                _offlineListener = createOfflineListener(_evtNamespace);
 
                 const defaultConfig = _getDefaultAppInsightsChannelConfig();
                 objForEachKey(defaultConfig, (field, value) => {
@@ -579,7 +557,7 @@ export class Sender extends BaseTelemetryPlugin implements IChannelControlsAI {
                     } else {
                         _self._onError(payload, errorMessage);
                     }
-                } else if (Offline.isOffline()) { // offline
+                } else if (_offlineListener && !_offlineListener.isOnline()) { // offline
                     // Note: Don't check for status == 0, since adblock gives this code
                     if (!_self._senderConfig.isRetryDisabled()) {
                         const offlineBackOffMultiplier = 10; // arbritrary number
@@ -587,7 +565,7 @@ export class Sender extends BaseTelemetryPlugin implements IChannelControlsAI {
     
                         _self.diagLog().throwInternal(
                             LoggingSeverity.WARNING,
-                            _InternalMessageId.TransmissionFailed, `. Offline - Response Code: ${status}. Offline status: ${Offline.isOffline()}. Will retry to send ${payload.length} items.`);
+                            _InternalMessageId.TransmissionFailed, `. Offline - Response Code: ${status}. Offline status: ${!_offlineListener.isOnline()}. Will retry to send ${payload.length} items.`);
                     }
                 } else {
 
@@ -682,7 +660,7 @@ export class Sender extends BaseTelemetryPlugin implements IChannelControlsAI {
                         }
     
                         if (droppedPayload.length > 0) {
-                            _fallbackSender(droppedPayload, true);
+                            _fallbackSender && _fallbackSender(droppedPayload, true);
                             _self.diagLog().throwInternal(LoggingSeverity.WARNING, _InternalMessageId.TransmissionFailed, ". " + "Failed to send telemetry with Beacon API, retried with normal sender.");
                         }
                     }
@@ -1051,6 +1029,25 @@ export class Sender extends BaseTelemetryPlugin implements IChannelControlsAI {
                 return regexp.test(config.instrumentationKey);
             }
         
+            function _initDefaults() {
+                _self._sender = null;
+                _self._buffer = null;
+                _self._appId = null;
+                _self._sample = null;
+                _headers = {};
+                _offlineListener = null;
+                _consecutiveErrors = 0;
+                _retryAt = null;
+                _lastSend = null;
+                _paused = false;
+                _timeoutHandle = null;
+                _serializer = null;
+                _stamp_specific_redirects = 0;
+                _syncFetchPayload = 0;
+                _fallbackSender = null;
+                _syncUnloadSender = null;
+                _evtNamespace = null;
+            }
         });
     }
 
@@ -1085,6 +1082,10 @@ export class Sender extends BaseTelemetryPlugin implements IChannelControlsAI {
      * Will not flush if the Send has been paused.
      */
     public onunloadFlush() {
+        // @DynamicProtoStub -- DO NOT add any code as this will be removed during packaging
+    }
+
+    public unload(itemCtx: IProcessTelemetryContext, isAsync: boolean): void {
         // @DynamicProtoStub -- DO NOT add any code as this will be removed during packaging
     }
 

@@ -3,12 +3,13 @@
 
 import { Snippet } from "./Initialization";
 import { ApplicationInsightsContainer } from "./ApplicationInsightsContainer";
+import { strUndefined } from "@microsoft/applicationinsights-core-js";
 
-export { Initialization as ApplicationInsights, Telemetry, Snippet } from "./Initialization";
+export { Initialization as ApplicationInsights, Snippet } from "./Initialization";
 
 "use strict";
 
-const Undefined = "undefined";
+const Undefined = strUndefined;
 function _logWarn(aiName:string, message:string) {
     // TODO: Find better place to warn to console when SDK initialization fails
     var _console = typeof console !== Undefined ? console : null;
